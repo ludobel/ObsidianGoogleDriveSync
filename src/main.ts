@@ -7,6 +7,7 @@ import { GoogleDriveProvider } from "./provider";
 import { AuthExportModal, DeviceFlowModal, chooseInitialSyncDirection, chooseLocalFilesToKeep, chooseRemoteCleanupCandidates, confirmDangerAction, confirmResetIndex, showAuthImportModal } from "./modals";
 import { RequestQueue } from "./queue";
 import { LocalVaultScanner } from "./scanner";
+import { SyncFilter } from "./filter";
 import { GoogleDriveSyncSettingTab } from "./settings";
 import { SyncEngine } from "./sync";
 import { DEFAULT_SETTINGS, GoogleDriveSyncSettings, InitialSyncDirection, PluginData, RemoteCleanupCandidate, RemoteSnapshotMeta, StoredAuth, StoredPluginData, SyncStatus, SyncSummary, defaultIgnoredPaths } from "./types";
@@ -24,6 +25,7 @@ export default class GoogleDriveSyncPlugin extends Plugin {
   provider!: GoogleDriveProvider;
   offlineQueue!: OfflineSyncQueue;
   scanner!: LocalVaultScanner;
+  syncFilter!: SyncFilter;
   syncEngine!: SyncEngine;
   accountLabel?: string;
   onConnectionChange?: () => void;
@@ -68,10 +70,16 @@ export default class GoogleDriveSyncPlugin extends Plugin {
       async (offlineQueue) => this.savePluginData({ offlineQueue }),
       () => this.getDeviceId()
     );
-    this.scanner = new LocalVaultScanner(this.app.vault, () => this.settings.ignoredPaths);
+    this.syncFilter = new SyncFilter(() => ({
+      ignoredPaths: this.settings.ignoredPaths,
+      excludedExtensions: this.settings.excludedExtensions,
+      maxFileSizeMB: this.settings.maxFileSizeMB
+    }));
+    this.scanner = new LocalVaultScanner(this.app.vault, this.syncFilter);
     this.syncEngine = new SyncEngine({
       app: this.app,
       scanner: this.scanner,
+      filter: this.syncFilter,
       drive: this.drive,
       provider: this.provider,
       offlineQueue: this.offlineQueue,
@@ -657,7 +665,14 @@ export default class GoogleDriveSyncPlugin extends Plugin {
       || path.startsWith(".sync/")
       || path.startsWith(".trash/")
       || path.startsWith(`${this.app.vault.configDir}/plugins/google-drive-vault-sync/`)
-      || isIgnored(path, ignored);
+      || isIgnored(path, ignored)
+      || this.syncFilter.isPathExcluded(path)
+      || this.isOversizedVaultFile(path);
+  }
+
+  private isOversizedVaultFile(path: string): boolean {
+    const file = this.app.vault.getAbstractFileByPath(path);
+    return file instanceof TFile && this.syncFilter.isSizeExcluded(file.stat.size);
   }
 
   private getVaultId(): string {

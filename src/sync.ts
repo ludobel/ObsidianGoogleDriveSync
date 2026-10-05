@@ -5,6 +5,7 @@ import { MergeEngine } from "./merge";
 import { OfflineSyncQueue } from "./offlineQueue";
 import { GoogleDriveProvider } from "./provider";
 import { LocalVaultScanner } from "./scanner";
+import { SyncFilter } from "./filter";
 import { BackupFileSource, BackupMode, ConflictPolicy, LocalFile, LocalFileMeta, LocalSyncManifest, PlannedDeletion, RemoteFile, RemoteFileMeta, RemoteManifest, RemoteSyncCommand, SyncIndexEntry, SyncQueueItem, SyncSummary } from "./types";
 import { byteSize, conflictPath, deletedCopyPath, getExtension, isLikelyText, sha256Hex, unique, writeVaultFile } from "./utils";
 import { LargeDeletionModal, showConflictNotice, showManualConflictModal, showRemoteDeleteConflictModal } from "./modals";
@@ -14,6 +15,7 @@ const MAX_SNAPSHOT_BYTES = 1024 * 1024;
 export type SyncEngineOptions = {
   app: App;
   scanner: LocalVaultScanner;
+  filter: SyncFilter;
   drive: GoogleDriveClient;
   provider: GoogleDriveProvider;
   offlineQueue: OfflineSyncQueue;
@@ -56,6 +58,19 @@ export class SyncEngine {
     return this.running;
   }
 
+  /**
+   * True when a path must be invisible to sync on this device: ignored path, excluded
+   * file type, or larger than the size limit (local file or remote copy).
+   * Such files are never uploaded, downloaded or deleted.
+   */
+  private isExcludedFromSync(path: string, remoteMeta?: RemoteFileMeta): boolean {
+    const filter = this.options.filter;
+    if (filter.isPathExcluded(path)) return true;
+    if (remoteMeta && !remoteMeta.deleted && filter.isSizeExcluded(remoteMeta.size)) return true;
+    const file = this.options.app.vault.getAbstractFileByPath(path);
+    return file instanceof TFile && filter.isSizeExcluded(file.stat.size);
+  }
+
   async syncNow(manual = false): Promise<SyncSummary | undefined> {
     if (this.running) {
       if (manual) new Notice("Google Drive sync is already running.");
@@ -86,8 +101,13 @@ export class SyncEngine {
       const index = { ...this.options.getIndex() };
       const localManifest = this.currentLocalManifest(index);
       await this.applyLocalRenames(local, state.manifest, index, localManifest, counters);
-      const paths = unique([...Object.keys(local), ...remoteChanges.map((change) => change.path), ...Object.keys(index), ...Object.keys(localManifest.records)]);
-      await this.log("sync-engine-paths-planned", { pathCount: paths.length });
+      const candidatePaths = unique([...Object.keys(local), ...remoteChanges.map((change) => change.path), ...Object.keys(index), ...Object.keys(localManifest.records)]);
+      const paths = candidatePaths.filter((path) => !this.isExcludedFromSync(path, state.manifest.files[path]));
+      await this.log("sync-engine-paths-planned", {
+        pathCount: paths.length,
+        excludedCount: candidatePaths.length - paths.length,
+        localExclusions: this.options.scanner.lastExclusions
+      });
       const deletionPlan = this.planDeletions(paths, local, state.manifest, index, localManifest);
       if (deletionPlan.length > 0) await this.log("sync-engine-deletion-plan", { count: deletionPlan.length });
       const allowedDeletions = await this.reviewLargeDeletionPlan(deletionPlan, Object.keys(index).length);
@@ -255,16 +275,20 @@ export class SyncEngine {
         try {
           const backupFiles: Record<string, BackupFileSource> = {};
           for (const remote of Object.values(state.manifest.files)) {
-            if (!remote.deleted) await this.captureRemoteBackup(backupFiles, remote.path, remote);
+            if (!remote.deleted && !this.isExcludedFromSync(remote.path, remote)) await this.captureRemoteBackup(backupFiles, remote.path, remote);
           }
           await this.options.drive.createBackup(state, backupFiles, [], this.options.getDeviceId(), this.options.getDeviceName(), this.options.getMaxBackups());
         } catch { /* ignore */ }
       }
+      const preservedFiles: RemoteManifest["files"] = {};
       for (const remote of Object.values(state.manifest.files)) {
-        if (!remote.deleted) {
-          await this.options.drive.trashFile(remote.driveFileId);
-          counters.remoteDeletes += 1;
+        if (remote.deleted) continue;
+        if (this.isExcludedFromSync(remote.path, remote)) {
+          preservedFiles[remote.path] = remote;
+          continue;
         }
+        await this.options.drive.trashFile(remote.driveFileId);
+        counters.remoteDeletes += 1;
       }
       if (state.manifestFileId) {
         await this.options.drive.trashFile(state.manifestFileId);
@@ -275,7 +299,7 @@ export class SyncEngine {
         version: 1,
         vaultId: this.options.getVaultId(),
         updatedAt: Date.now(),
-        files: {},
+        files: preservedFiles,
         command,
         snapshots: state.manifest.snapshots ?? []
       };
@@ -320,7 +344,7 @@ export class SyncEngine {
         }
       }
       for (const remote of Object.values(state.manifest.files)) {
-        if (!remote.deleted) await this.downloadRemote(remote.path, remote, index, counters);
+        if (!remote.deleted && !this.isExcludedFromSync(remote.path, remote)) await this.downloadRemote(remote.path, remote, index, counters);
       }
       const afterDownload = await this.options.scanner.scan();
       for (const path of keep) {
@@ -566,6 +590,7 @@ export class SyncEngine {
     const missingRemoteByHash = new Map<string, RemoteFileMeta[]>();
     for (const [oldPath, remote] of Object.entries(manifest.files)) {
       if (local[oldPath] || remote.deleted) continue;
+      if (this.isExcludedFromSync(oldPath, remote)) continue;
       const oldIndex = index[oldPath];
       const record = localManifest.records[oldPath];
       const baseHash = record?.lastKnownRemoteHash ?? oldIndex?.lastSyncedHash ?? null;
@@ -851,7 +876,7 @@ export class SyncEngine {
       if (!remote || remote.deleted) await this.safeLocalDelete(path, index, counters);
     }
     for (const remote of Object.values(state.manifest.files)) {
-      if (!remote.deleted) await this.downloadRemote(remote.path, remote, index, counters);
+      if (!remote.deleted && !this.isExcludedFromSync(remote.path, remote)) await this.downloadRemote(remote.path, remote, index, counters);
     }
     await this.options.setIndex(index);
     await this.markCommandApplied(command.id);

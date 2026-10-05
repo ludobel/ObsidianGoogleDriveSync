@@ -2,6 +2,7 @@ import { Modal, Notice, Platform, PluginSettingTab, Setting } from "obsidian";
 import { runGoogleNetworkDiagnostics } from "./auth";
 import GoogleDriveSyncPlugin from "./main";
 import { requestManualBackupName, showBackupRestoreModal } from "./modals";
+import { HARD_MAX_FILE_SIZE_MB, parseExtensionList } from "./filter";
 
 export class GoogleDriveSyncSettingTab extends PluginSettingTab {
   constructor(private plugin: GoogleDriveSyncPlugin) {
@@ -370,7 +371,7 @@ export class GoogleDriveSyncSettingTab extends PluginSettingTab {
 
     new Setting(contentEl)
       .setName("Ignored paths")
-      .setDesc("One vault-relative path or folder prefix per line.")
+      .setDesc("One vault-relative path, folder prefix or glob per line (examples: Archives/, *.mp4, **/videos/**).")
       .addTextArea((text) => {
         text.inputEl.rows = 8;
         text.inputEl.cols = 40;
@@ -379,6 +380,29 @@ export class GoogleDriveSyncSettingTab extends PluginSettingTab {
           await this.plugin.saveSettings();
         });
       });
+
+    new Setting(contentEl)
+      .setName("Excluded file types")
+      .setDesc("Extensions that are never synced, separated by commas (example: mp4, m4a, mov, mkv, avi). Excluded files are left untouched on every device: never uploaded, downloaded or deleted.")
+      .addText((text) => text
+        .setPlaceholder("mp4, m4a, mov")
+        .setValue(this.plugin.settings.excludedExtensions)
+        .onChange(async (value) => {
+          this.plugin.settings.excludedExtensions = Array.from(parseExtensionList(value)).length ? value : "";
+          await this.plugin.saveSettings();
+        }));
+
+    new Setting(contentEl)
+      .setName("Maximum file size (MB)")
+      .setDesc(`Files larger than this are never synced and are left untouched on every device. 0 = maximum allowed (${HARD_MAX_FILE_SIZE_MB} MB). Files are read entirely into memory: above ~500 MB, Obsidian may become unstable.`)
+      .addText((text) => text
+        .setPlaceholder("500")
+        .setValue(String(this.plugin.settings.maxFileSizeMB))
+        .onChange(async (value) => {
+          const parsed = Number.parseInt(value, 10);
+          this.plugin.settings.maxFileSizeMB = Number.isFinite(parsed) && parsed >= 0 ? Math.min(parsed, HARD_MAX_FILE_SIZE_MB) : 500;
+          await this.plugin.saveSettings();
+        }));
 
     new Setting(contentEl)
       .setName("Debug mode")

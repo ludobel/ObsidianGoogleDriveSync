@@ -16,6 +16,10 @@ export type GoogleDriveSyncSettings = {
   requestConcurrency: number;
   maxDeletionPercent: number;
   ignoredPaths: string;
+  /** Extensions never synced, e.g. "mp4, m4a". */
+  excludedExtensions: string;
+  /** Files above this size (MB) are never synced. 0 = maximum allowed. */
+  maxFileSizeMB: number;
   debugMode: boolean;
   backupEnabled: boolean;
   backupMode: BackupMode;
@@ -291,6 +295,8 @@ export const DEFAULT_SETTINGS: GoogleDriveSyncSettings = {
   requestConcurrency: 2,
   maxDeletionPercent: 20,
   ignoredPaths: "",
+  excludedExtensions: "",
+  maxFileSizeMB: 500,
   debugMode: false,
   backupEnabled: true,
   backupMode: "timed",

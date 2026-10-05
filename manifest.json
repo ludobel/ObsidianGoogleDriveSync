@@ -1,11 +1,11 @@
 {
-  "id": "google-drive-vault-sync",
-  "name": "Google Drive Vault Sync",
-  "version": "0.1.21",
-  "minAppVersion": "1.8.0",
-  "description": "Two-way auto/manual vault sync using Google Drive.",
-  "author": "Haniewicz",
-  "authorUrl": "",
-  "fundingUrl": "",
-  "isDesktopOnly": false
+	"id": "google-drive-vault-sync",
+	"name": "Google Drive Vault Sync",
+	"version": "0.2.0-lb.1",
+	"minAppVersion": "1.8.0",
+	"description": "Two-way auto/manual vault sync using Google Drive (fork: size limit and file-type exclusions).",
+	"author": "Haniewicz",
+	"authorUrl": "",
+	"fundingUrl": "",
+	"isDesktopOnly": false
 }

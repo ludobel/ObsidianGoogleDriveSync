@@ -1,4 +1,5 @@
 import { TFile, TFolder, Vault, normalizePath } from "obsidian";
+import { matchesIgnorePatterns } from "./filter";
 
 const TEXT_EXTENSIONS = new Set([
   "md",
@@ -42,13 +43,7 @@ export function normalizeVaultPath(path: string): string {
 }
 
 export function isIgnored(path: string, ignoredPatterns: string[]): boolean {
-  const normalized = normalizeVaultPath(path);
-  return ignoredPatterns.some((pattern) => {
-    const clean = normalizeVaultPath(pattern.trim());
-    if (!clean) return false;
-    if (clean.endsWith("/")) return normalized.startsWith(clean);
-    return normalized === clean || normalized.startsWith(`${clean}/`);
-  });
+  return matchesIgnorePatterns(normalizeVaultPath(path), ignoredPatterns);
 }
 
 export function ignoredPatternsFromSettings(value: string): string[] {

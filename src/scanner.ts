@@ -1,17 +1,29 @@
 import { TFile, Vault } from "obsidian";
+import { SyncFilter } from "./filter";
 import { LocalFileMeta } from "./types";
-import { byteSize, getExtension, ignoredPatternsFromSettings, isIgnored, isLikelyText, sha256Hex } from "./utils";
+import { byteSize, getExtension, isLikelyText, sha256Hex } from "./utils";
+
+export type ScanExclusionStats = { path: number; type: number; size: number };
 
 export class LocalVaultScanner {
-  constructor(private vault: Vault, private getIgnoredPaths: () => string) {}
+  /** Counts of files skipped by the last scan, per reason (for logs and status). */
+  lastExclusions: ScanExclusionStats = { path: 0, type: 0, size: 0 };
+
+  constructor(private vault: Vault, private filter: SyncFilter) {}
 
   async scan(): Promise<Record<string, LocalFileMeta>> {
-    const ignored = ignoredPatternsFromSettings(this.getIgnoredPaths());
-    const files = this.vault.getFiles().filter((file) => !isIgnored(file.path, ignored));
+    const stats: ScanExclusionStats = { path: 0, type: 0, size: 0 };
     const result: Record<string, LocalFileMeta> = {};
-    for (const file of files) {
+    for (const file of this.vault.getFiles()) {
+      // Size comes from file.stat, so oversized files are skipped before being read into memory.
+      const reason = this.filter.exclusionReason(file.path, file.stat?.size);
+      if (reason) {
+        stats[reason] += 1;
+        continue;
+      }
       result[file.path] = await this.scanFile(file);
     }
+    this.lastExclusions = stats;
     return result;
   }
 
